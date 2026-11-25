@@ -1,0 +1,12 @@
+# LocalCI checks itself. Set LOCALCI_TEST_PG to also run the Postgres provider tests.
+project: localci
+requires: [go]
+groups:
+  - name: go
+    steps:
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
