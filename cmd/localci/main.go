@@ -95,7 +95,8 @@ func cmdPush(ctx context.Context, args []string) int {
 	}
 	push := exec.CommandContext(ctx, "git", append([]string{"push"}, fs.Args()...)...)
 	push.Dir = o.Repo
-	push.Env = append(os.Environ(), "LOCALCI_SKIP=1") // the pre-push hook would run it all again
+	// The pre-push hook skips refs at this SHA only; any other commit in the push is checked.
+	push.Env = append(os.Environ(), "LOCALCI_CHECKED="+o.SHA)
 	push.Stdin, push.Stdout, push.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := push.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "localci: git push failed:", err)

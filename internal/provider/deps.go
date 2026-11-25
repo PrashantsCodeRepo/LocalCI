@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -193,6 +194,15 @@ func (c *DepCache) prepareNpm(ctx context.Context, root string, d config.Dep, tr
 	if err != nil {
 		return nil, fmt.Errorf("deps %s: %w (npm ci needs a lockfile)", d.Name, err)
 	}
+	if hooks := rootLifecycleScripts(manifest); len(hooks) > 0 {
+		// The project's own install scripts may read any file in the repository, which a
+		// cache keyed on the manifests cannot account for. Install in the worktree instead.
+		fmt.Fprintf(c.Out, "localci: %s has root %s scripts; running npm ci in the worktree (not cached)\n", d.Name, strings.Join(hooks, ", "))
+		if err := runInstall(ctx, c.Out, src, env, "npm", "ci", "--no-audit", "--no-fund", "--loglevel=error"); err != nil {
+			return nil, fmt.Errorf("deps %s: %w", d.Name, err)
+		}
+		return &Prepared{}, nil
+	}
 	ver, err := exec.CommandContext(ctx, node, "--version").Output()
 	if err != nil {
 		return nil, fmt.Errorf("deps %s: %s --version: %w", d.Name, node, err)
@@ -227,6 +237,30 @@ func (c *DepCache) prepareNpm(ctx context.Context, root string, d config.Dep, tr
 	return &Prepared{Installed: installed, release: release}, nil
 }
 
+// rootLifecycleScripts lists the install-time scripts a package.json defines for the project
+// itself (npm ci runs them in the project directory).
+func rootLifecycleScripts(manifest []byte) []string {
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(manifest, &pkg) != nil {
+		return nil
+	}
+	var out []string
+	for _, k := range []string{"preinstall", "install", "postinstall", "preprepare", "prepare", "postprepare"} {
+		if _, ok := pkg.Scripts[k]; ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// isLocalPath reports whether a pip install argument names a path in the worktree,
+// e.g. "./backend[dev]" or ".".
+func isLocalPath(arg string) bool {
+	return arg == "." || strings.HasPrefix(arg, "./") || strings.HasPrefix(arg, "../") || strings.HasPrefix(arg, "/")
+}
+
 func (c *DepCache) preparePython(ctx context.Context, root string, d config.Dep, tree string, env []string) (*Prepared, error) {
 	py, err := ResolveToolchain("python", d.Python)
 	if err != nil {
@@ -259,12 +293,39 @@ func (c *DepCache) preparePython(ctx context.Context, root string, d config.Dep,
 		return nil, fmt.Errorf("deps %s: %w", d.Name, err)
 	}
 	Prune(root, d.Name, d.Keep)
-	return &Prepared{
+	p := &Prepared{
 		PathDirs:  []string{filepath.Join(venv, "bin")},
 		Env:       []string{"VIRTUAL_ENV=" + venv},
 		Installed: installed,
 		release:   release,
-	}, nil
+	}
+
+	// The cache key covers the manifests, not the project's own source, so the venv may hold
+	// an older commit's copy of a local package. Install this commit's copy into a per-run
+	// overlay that comes first on PYTHONPATH and PATH. The shared venv is never modified.
+	var local []string
+	for _, a := range d.Install {
+		if isLocalPath(a) {
+			local = append(local, a)
+		}
+	}
+	if len(local) > 0 {
+		overlay, err := os.MkdirTemp("", "localci-py-")
+		if err != nil {
+			release()
+			return nil, err
+		}
+		p.release = func() { release(); os.RemoveAll(overlay) }
+		args := append([]string{"-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--no-deps", "--target", overlay}, local...)
+		if err := runInstall(ctx, c.Out, tree, env, filepath.Join(venv, "bin", "python"), args...); err != nil {
+			p.Release()
+			return nil, fmt.Errorf("deps %s: installing this commit's %s: %w", d.Name, strings.Join(local, " "), err)
+		}
+		p.PathDirs = append([]string{filepath.Join(overlay, "bin")}, p.PathDirs...)
+		p.Env = append(p.Env, "PYTHONPATH="+overlay)
+		p.Installed = true // the build may have left files in the worktree
+	}
+	return p, nil
 }
 
 // LookPathIn finds name on the PATH in env (exec.Command would search this process's PATH).

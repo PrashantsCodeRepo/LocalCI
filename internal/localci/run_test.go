@@ -136,7 +136,37 @@ func TestHookInstallRespectsHooksPathAndExistingHooks(t *testing.T) {
 	if _, err := InstallHook(context.Background(), repo, false); err == nil {
 		t.Error("replaced a foreign hook without --force")
 	}
+	// A non-executable hook must come out executable, or git silently ignores it.
+	os.Chmod(path, 0o644)
 	if _, err := InstallHook(context.Background(), repo, true); err != nil {
 		t.Errorf("--force: %v", err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm()&0o111 == 0 {
+		t.Errorf("hook mode %v is not executable", fi.Mode().Perm())
+	}
+}
+
+// The hook skips only refs at the SHA `localci push` checked; other refs are still checked.
+func TestHookSkipsOnlyTheCheckedSHA(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-localci")
+	log := filepath.Join(dir, "calls")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$2\" >> "+log+"\n"), 0o755)
+	hook := filepath.Join(dir, "pre-push")
+	os.WriteFile(hook, []byte(HookScript(bin)), 0o755)
+
+	z := strings.Repeat("0", 40)
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	cmd := exec.Command(hook, "origin", "url")
+	cmd.Env = append(os.Environ(), "LOCALCI_CHECKED="+a, "PATH=/usr/bin:/bin")
+	cmd.Stdin = strings.NewReader("refs/heads/x " + a + " refs/heads/x " + z + "\n" +
+		"refs/heads/y " + b + " refs/heads/y " + z + "\n" +
+		"(delete) " + z + " refs/heads/old " + b + "\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	got, _ := os.ReadFile(log)
+	if strings.TrimSpace(string(got)) != b {
+		t.Errorf("hook checked %q, want only %s", got, b)
 	}
 }

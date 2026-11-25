@@ -67,21 +67,33 @@ func TestPostgresDropsDatabasesOfDeadRuns(t *testing.T) {
 	server := testServer(t)
 	p := NewPostgres("localcitest", config.Postgres{URL: server, Create: []string{""}})
 	ctx := context.Background()
-	stale := "localcitest_localci_" + strconv.Itoa(deadPID(t)) + "_test"
+	stale := "localcitest_localci_" + HostID() + "_" + strconv.Itoa(deadPID(t)) + "_test"
+	// The same dead PID under another host's id belongs to that host and must survive.
+	foreign := "localcitest_localci_00000000_" + strconv.Itoa(deadPID(t)) + "_test"
 	admin, err := p.connect(ctx, "postgres")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{stale}.Sanitize()); err != nil {
-		t.Fatal(err)
+	for _, db := range []string{stale, foreign} {
+		if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{db}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	admin.Close(ctx)
+	defer func() {
+		c, _ := p.connect(context.Background(), "postgres")
+		dropDB(context.Background(), c, foreign)
+		c.Close(context.Background())
+	}()
 	if err := p.Setup(ctx, "localcitest"); err != nil {
 		t.Fatal(err)
 	}
 	defer p.Teardown()
 	if dbExists(t, p, stale) {
 		t.Errorf("stale %s survived Setup", stale)
+	}
+	if !dbExists(t, p, foreign) {
+		t.Errorf("Setup dropped %s, which another host owns", foreign)
 	}
 }
 

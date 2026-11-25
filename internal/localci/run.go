@@ -135,7 +135,18 @@ func Run(ctx context.Context, opts Options) (out *Outcome, err error) {
 			return out, err
 		}
 		node = bin
-		pathDirs = append(pathDirs, filepath.Dir(bin))
+		// Steps and npm's `#!/usr/bin/env node` call it "node". Put a per-run shim first on
+		// PATH so that name is the validated binary even when it is installed as node22 or
+		// shares a directory with another node.
+		shim, err := os.MkdirTemp("", "localci-bin-")
+		if err != nil {
+			return out, err
+		}
+		defer os.RemoveAll(shim)
+		if err := os.Symlink(bin, filepath.Join(shim, "node")); err != nil {
+			return out, err
+		}
+		pathDirs = append(pathDirs, shim, filepath.Dir(bin))
 		fmt.Fprintf(w, "localci: node %s -> %s\n", v, bin)
 	} else if p, err := exec.LookPath("node"); err == nil {
 		node = p

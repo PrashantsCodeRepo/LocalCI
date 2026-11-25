@@ -115,9 +115,10 @@ groups:
 ### Postgres
 
 LocalCI uses an existing server (a native local install is the default case). Each run
-gets its own database name, `<project>_localci_<pid>`. Before any step it drops that name
-plus every declared suffix, drops databases left by runs whose PID is no longer alive,
-then creates each `create` database and connects to it. If it cannot, the run fails.
+gets its own database name, `<project>_localci_<hostid>_<pid>`, where `<hostid>` is a short
+hash of the hostname. Before any step it drops that name plus every declared suffix, drops
+databases that this host's earlier runs left behind if their PID is no longer alive (it never
+touches another host's databases on a shared server), then creates each `create` database and connects to it. If it cannot, the run fails.
 This matters because many test fixtures `pytest.skip` when they cannot create their
 database, which would otherwise pass with no database tests run. On exit every one of
 those databases is dropped.
@@ -128,11 +129,16 @@ Installs live under `~/.cache/localci/deps/<project>/<name>-<key>`:
 
 - `npm`: the key covers `package.json`, `package-lock.json` and the node version. Both
   files are in the key because `npm ci` refuses manifests that disagree; a key on the
-  lockfile alone would reuse an old install and pass.
+  lockfile alone would reuse an old install and pass. If `package.json` has its own install
+  scripts (`preinstall`, `install`, `postinstall`, `prepare`), those may read any file in
+  the repository, so LocalCI runs `npm ci` in the worktree instead and does not cache it.
 - `python`: a venv made with the pinned interpreter. The key covers the manifests, the
-  install arguments and the exact Python version. A fresh install of a local path can
-  write build files into the worktree, so the worktree is cleaned (`git clean -ffdx`)
-  before the steps run.
+  install arguments and the exact Python version, not the project's own source. So each run
+  also installs this commit's copy of every local path in `install` (such as `./backend`)
+  into a per-run overlay with `--no-deps`. The overlay comes first on `PYTHONPATH` and
+  `PATH`, and the shared venv is never modified. If you set `PYTHONPATH` in `env`, include
+  `${PYTHONPATH}` to keep the overlay. Building a local path can write files into the
+  worktree, so the worktree is cleaned (`git clean -ffdx`) before the steps run.
 
 An install happens once per key, under a file lock, using the same toolchain the steps
 use. A failed or interrupted install is removed. Each run marks the install it uses with
@@ -142,15 +148,20 @@ removes one whose marker PID is alive.
 ### Toolchain pins
 
 `toolchains: {node: "22"}` looks for Homebrew's `node@22`, then `node22`, then `node`, and
-checks `--version`. If none matches, the run fails and lists what it tried. Python versions
+checks `--version`. If none matches, the run fails and lists what it tried. A per-run `node`
+symlink to the binary it found goes first on `PATH`, so `node`, and npm's
+`#!/usr/bin/env node`, run that version even when it is installed as `node22`. Python versions
 are pinned per dependency the same way (`python3.14`, then `python@3.14`).
 
 ## GitHub status
 
 `localci push` runs the checks on HEAD. If they pass it runs `git push` with your
-arguments (setting `LOCALCI_SKIP=1` so the hook does not run them again), then posts the
+arguments, then posts the
 `localci` status (and `localci/<group>` with `per_group`) through `gh api`. A pre-push hook
 cannot do this itself, because GitHub does not have the commit until the push finishes.
+During that push, `LOCALCI_CHECKED` tells the pre-push hook which SHA was just checked. The
+hook skips only refs at that SHA, so any other branch the push arguments include is still
+checked.
 `localci run --status <rev>` posts for a commit that is already on GitHub.
 
 **The status is self-reported.** Anyone with push access can post any status with `gh

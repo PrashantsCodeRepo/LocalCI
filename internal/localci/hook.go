@@ -13,15 +13,16 @@ import (
 const hookMarker = "# localci pre-push hook"
 
 // HookScript is the pre-push hook. It checks every commit being pushed (not deletions) and
-// blocks the push if one fails. `localci push` sets LOCALCI_SKIP because it has already run.
+// blocks the push if one fails. `localci push` sets LOCALCI_CHECKED to the SHA it has just
+// checked; only refs at that SHA are skipped, so any other branch in the push is still checked.
 func HookScript(bin string) string {
 	return `#!/bin/sh
 ` + hookMarker + ` (written by "localci hook install")
-[ -n "$LOCALCI_SKIP" ] && exit 0
 LOCALCI=$(command -v localci || echo '` + strings.ReplaceAll(bin, "'", `'\''`) + `')
 z=0000000000000000000000000000000000000000
 while read -r lref lsha rref rsha; do
   [ "$lsha" = "$z" ] && continue
+  [ -n "$LOCALCI_CHECKED" ] && [ "$lsha" = "$LOCALCI_CHECKED" ] && continue
   "$LOCALCI" run "$lsha" </dev/null || exit 1
 done
 `
@@ -52,5 +53,9 @@ func InstallHook(ctx context.Context, dir string, force bool) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	return path, os.WriteFile(path, []byte(HookScript(bin)), 0o755)
+	if err := os.WriteFile(path, []byte(HookScript(bin)), 0o755); err != nil {
+		return "", err
+	}
+	// WriteFile keeps the mode of an existing file; git ignores a hook that is not executable.
+	return path, os.Chmod(path, 0o755)
 }

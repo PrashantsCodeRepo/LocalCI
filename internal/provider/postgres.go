@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,13 +23,22 @@ type Postgres struct {
 	Name   string // per-run base name: <project>_localci_<pid>
 }
 
-// NewPostgres names this run's database. LOCALCI_PG overrides the configured server URL.
+// HostID identifies this machine in database names, so a run only ever sweeps databases
+// that this machine's runs created: a PID means nothing on another host sharing the server.
+func HostID() string {
+	h, _ := os.Hostname()
+	sum := sha256.Sum256([]byte(h))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+// NewPostgres names this run's database <project>_localci_<hostid>_<pid>. LOCALCI_PG
+// overrides the configured server URL.
 func NewPostgres(project string, cfg config.Postgres) *Postgres {
 	server := cfg.URL
 	if v := os.Getenv("LOCALCI_PG"); v != "" {
 		server = v
 	}
-	return &Postgres{cfg: cfg, server: server, Name: fmt.Sprintf("%s_localci_%d", project, os.Getpid())}
+	return &Postgres{cfg: cfg, server: server, Name: fmt.Sprintf("%s_localci_%s_%d", project, HostID(), os.Getpid())}
 }
 
 // URL returns the server URL with database db.
@@ -99,9 +110,10 @@ func (p *Postgres) Setup(ctx context.Context, project string) error {
 	return nil
 }
 
-// dropStale drops <project>_localci_<pid>* databases whose PID is no longer running.
+// dropStale drops this host's <project>_localci_<hostid>_<pid>* databases whose PID is no
+// longer running. Other hosts' databases are never touched.
 func (p *Postgres) dropStale(ctx context.Context, admin *pgx.Conn, project string) error {
-	re := regexp.MustCompile(`^` + regexp.QuoteMeta(project) + `_localci_(\d+)`)
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(project) + `_localci_` + HostID() + `_(\d+)`)
 	rows, err := admin.Query(ctx, "select datname from pg_database")
 	if err != nil {
 		return fmt.Errorf("postgres: list databases: %w", err)

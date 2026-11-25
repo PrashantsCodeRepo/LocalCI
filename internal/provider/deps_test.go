@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,4 +119,25 @@ func deadPID(t *testing.T) int {
 		t.Fatal(err)
 	}
 	return cmd.Process.Pid
+}
+
+func TestRootLifecycleScripts(t *testing.T) {
+	got := rootLifecycleScripts([]byte(`{"scripts":{"build":"vite","postinstall":"node setup.js","prepare":"husky"}}`))
+	if strings.Join(got, ",") != "postinstall,prepare" {
+		t.Errorf("got %v", got)
+	}
+	if got := rootLifecycleScripts([]byte(`{"scripts":{"test":"vitest"}}`)); len(got) != 0 {
+		t.Errorf("got %v for a manifest with no install scripts", got)
+	}
+}
+
+func TestIsLocalPath(t *testing.T) {
+	for arg, want := range map[string]bool{
+		".": true, "./backend[dev]": true, "../lib": true, "/abs/pkg": true,
+		"requests": false, "-r": false, "requirements.txt": false, "pytest>=8": false,
+	} {
+		if isLocalPath(arg) != want {
+			t.Errorf("isLocalPath(%q) = %v", arg, !want)
+		}
+	}
 }

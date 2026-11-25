@@ -159,6 +159,10 @@ func (c *Config) validate() error {
 			if s != "" && !regexp.MustCompile(`^[a-z0-9_]+$`).MatchString(s) {
 				return fmt.Errorf("postgres suffix %q: use lowercase letters, digits and _", s)
 			}
+			// <project>_localci_<8 hex>_<pid up to 7 digits><suffix> must fit Postgres's 63 bytes.
+			if n := len(c.Project) + len("_localci_") + 8 + 1 + 7 + len(s); n > 63 {
+				return fmt.Errorf("postgres: project %q with suffix %q makes database names too long (%d > 63 bytes)", c.Project, s, n)
+			}
 		}
 	}
 	seen := map[string]bool{}
