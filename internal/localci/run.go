@@ -4,6 +4,7 @@ package localci
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -106,7 +107,9 @@ func Run(ctx context.Context, opts Options) (out *Outcome, err error) {
 	out.LogPath = log.Path
 	w := log.Writer
 	defer func() {
-		if err != nil {
+		if errors.Is(err, context.Canceled) {
+			fmt.Fprintln(w, "localci: interrupted; cleaned up")
+		} else if err != nil {
 			fmt.Fprintf(w, "localci: %v\n", err)
 		}
 	}()
