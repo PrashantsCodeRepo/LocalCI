@@ -156,8 +156,10 @@ func (c *Config) validate() error {
 			p.Create = []string{""}
 		}
 		for _, s := range append(append([]string{}, p.Suffixes...), p.Create...) {
-			if s != "" && !regexp.MustCompile(`^[a-z0-9_]+$`).MatchString(s) {
-				return fmt.Errorf("postgres suffix %q: use lowercase letters, digits and _", s)
+			// No leading digit: the name ends <pid><suffix>, and a digit would read as part of
+			// the PID when stale databases are matched to their owner.
+			if s != "" && !regexp.MustCompile(`^[a-z_][a-z0-9_]*$`).MatchString(s) {
+				return fmt.Errorf("postgres suffix %q: use lowercase letters, digits and _, not starting with a digit", s)
 			}
 			// <project>_localci_<8 hex>_<pid up to 7 digits><suffix> must fit Postgres's 63 bytes.
 			if n := len(c.Project) + len("_localci_") + 8 + 1 + 7 + len(s); n > 63 {

@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -139,5 +141,36 @@ func TestIsLocalPath(t *testing.T) {
 		if isLocalPath(arg) != want {
 			t.Errorf("isLocalPath(%q) = %v", arg, !want)
 		}
+	}
+}
+
+func TestUncachedNpmReason(t *testing.T) {
+	for manifest, uncached := range map[string]bool{
+		`{"name":"a"}`:                                   false,
+		`{"workspaces":["packages/*"]}`:                  true,
+		`{"workspaces":{"packages":["libs/*"]}}`:         true,
+		`{"workspaces":[]}`:                              false,
+		`{"scripts":{"postinstall":"node x.js"}}`:        true,
+		`{"scripts":{"build":"vite"},"workspaces":null}`: false,
+	} {
+		if got := uncachedNpmReason([]byte(manifest)) != ""; got != uncached {
+			t.Errorf("%s: uncached=%v, want %v", manifest, got, uncached)
+		}
+	}
+}
+
+// Cancelling an install must kill its descendants and return promptly, not wait for a child
+// that holds the output pipe.
+func TestRunInstallKillsDescendantsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	var out bytes.Buffer
+	err := runInstall(ctx, &out, t.TempDir(), os.Environ(), "bash", "-c", "sleep 30 & sleep 30")
+	if err == nil {
+		t.Fatal("install was not cancelled")
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Errorf("cancel took %s; descendants kept it waiting", el)
 	}
 }

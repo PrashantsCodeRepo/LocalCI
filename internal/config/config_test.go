@@ -43,6 +43,7 @@ func TestParseRejects(t *testing.T) {
 		"bad kind":       "project: x\ndeps: [{name: d, kind: gem}]\ngroups: [{name: g, steps: [{name: s, run: x}]}]",
 		"python missing": "project: x\ndeps: [{name: d, kind: python}]\ngroups: [{name: g, steps: [{name: s, run: x}]}]",
 		"bad suffix":     "project: x\npostgres: {suffixes: [\"; drop\"]}\ngroups: [{name: g, steps: [{name: s, run: x}]}]",
+		"digit suffix":   "project: x\npostgres: {suffixes: [\"2_test\"]}\ngroups: [{name: g, steps: [{name: s, run: x}]}]",
 		"bad tier":       "project: x\ngroups: [{name: g, steps: [{name: s, run: x, tier: huge}]}]",
 		"bad toolchain":  "project: x\ntoolchains: {ruby: \"3\"}\ngroups: [{name: g, steps: [{name: s, run: x}]}]",
 	} {

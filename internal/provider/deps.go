@@ -194,10 +194,11 @@ func (c *DepCache) prepareNpm(ctx context.Context, root string, d config.Dep, tr
 	if err != nil {
 		return nil, fmt.Errorf("deps %s: %w (npm ci needs a lockfile)", d.Name, err)
 	}
-	if hooks := rootLifecycleScripts(manifest); len(hooks) > 0 {
-		// The project's own install scripts may read any file in the repository, which a
-		// cache keyed on the manifests cannot account for. Install in the worktree instead.
-		fmt.Fprintf(c.Out, "localci: %s has root %s scripts; running npm ci in the worktree (not cached)\n", d.Name, strings.Join(hooks, ", "))
+	if why := uncachedNpmReason(manifest); why != "" {
+		// The project's own install scripts may read any file in the repository, and
+		// workspace packages are linked from their directories, so a cache directory holding
+		// only the manifests cannot reproduce the install. Install in the worktree instead.
+		fmt.Fprintf(c.Out, "localci: %s %s; running npm ci in the worktree (not cached)\n", d.Name, why)
 		if err := runInstall(ctx, c.Out, src, env, "npm", "ci", "--no-audit", "--no-fund", "--loglevel=error"); err != nil {
 			return nil, fmt.Errorf("deps %s: %w", d.Name, err)
 		}
@@ -235,6 +236,30 @@ func (c *DepCache) prepareNpm(ctx context.Context, root string, d config.Dep, tr
 	}
 	Prune(root, d.Name, d.Keep)
 	return &Prepared{Installed: installed, release: release}, nil
+}
+
+// uncachedNpmReason says why a package.json cannot be installed from its manifests alone,
+// or returns "" when it can.
+func uncachedNpmReason(manifest []byte) string {
+	if hooks := rootLifecycleScripts(manifest); len(hooks) > 0 {
+		return "has root " + strings.Join(hooks, ", ") + " scripts"
+	}
+	if hasWorkspaces(manifest) {
+		return "uses npm workspaces"
+	}
+	return ""
+}
+
+// hasWorkspaces reports whether package.json declares npm workspaces.
+func hasWorkspaces(manifest []byte) bool {
+	var pkg struct {
+		Workspaces json.RawMessage `json:"workspaces"`
+	}
+	if json.Unmarshal(manifest, &pkg) != nil {
+		return false
+	}
+	w := strings.TrimSpace(string(pkg.Workspaces))
+	return w != "" && w != "null" && w != "[]" && w != "{}"
 }
 
 // rootLifecycleScripts lists the install-time scripts a package.json defines for the project
@@ -352,6 +377,11 @@ func runInstall(ctx context.Context, out io.Writer, dir string, env []string, na
 	cmd := exec.CommandContext(ctx, LookPathIn(name, env), args...)
 	cmd.Dir = dir
 	cmd.Env = env
+	// Own process group, as for steps: on Ctrl-C, kill lifecycle scripts and build helpers
+	// too, and stop waiting on pipes a stray descendant still holds.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)

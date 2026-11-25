@@ -69,7 +69,7 @@ env:                        # for every step; ${VARS} are expanded
 postgres:
   url: postgresql://localhost:5432   # the server; LOCALCI_PG overrides it
   env: DATABASE_URL                  # receives postgresql://.../myapp_localci_<pid>
-  suffixes: [_test, _eval]           # databases your code derives from that name
+  suffixes: [_test, _eval]           # databases your code derives from that name (no leading digit)
   create: [_test]                    # created and connected to before any step
 
 deps:
@@ -131,7 +131,9 @@ Installs live under `~/.cache/localci/deps/<project>/<name>-<key>`:
   files are in the key because `npm ci` refuses manifests that disagree; a key on the
   lockfile alone would reuse an old install and pass. If `package.json` has its own install
   scripts (`preinstall`, `install`, `postinstall`, `prepare`), those may read any file in
-  the repository, so LocalCI runs `npm ci` in the worktree instead and does not cache it.
+  the repository. If it declares `workspaces`, those packages are linked from their own
+  directories. In either case LocalCI runs `npm ci` in the worktree instead and does not cache
+  it.
 - `python`: a venv made with the pinned interpreter. The key covers the manifests, the
   install arguments and the exact Python version, not the project's own source. So each run
   also installs this commit's copy of every local path in `install` (such as `./backend`)
