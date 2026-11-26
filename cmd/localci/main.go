@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/PrashantsCodeRepo/LocalCI/internal/gitx"
 	"github.com/PrashantsCodeRepo/LocalCI/internal/localci"
@@ -20,7 +21,8 @@ var version = "dev"
 const usage = `localci runs a project's CI checks locally on an exact commit.
 
 Usage:
-  localci run [--tier full] [--status] [<rev>]   check a commit (default HEAD)
+  localci run [--tier full] [--status | --status-after-push] [<rev>]
+                                                 check a commit (default HEAD)
   localci push [--tier full] [-- <git push args>] check HEAD, git push, post the status
   localci hook install [--force]                  write a pre-push hook that runs the checks
   localci version
@@ -50,6 +52,8 @@ func run(args []string) int {
 		return cmdPush(ctx, args[1:])
 	case "hook":
 		return cmdHook(ctx, args[1:])
+	case "post-pending":
+		return cmdPostPending(ctx, args[1:])
 	case "version", "--version":
 		fmt.Println("localci", version)
 		return 0
@@ -65,11 +69,16 @@ func cmdRun(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	tier := fs.String("tier", "", `"full" also runs tier: full steps`)
 	status := fs.Bool("status", false, "post a GitHub commit status (the commit must be on GitHub)")
+	afterPush := fs.Bool("status-after-push", false, "post the status in the background once the commit reaches GitHub (for the pre-push hook)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() > 1 {
 		fmt.Fprintln(os.Stderr, "localci run: at most one revision")
+		return 2
+	}
+	if *status && *afterPush {
+		fmt.Fprintln(os.Stderr, "localci run: use --status or --status-after-push, not both")
 		return 2
 	}
 	o, err := localci.Run(ctx, localci.Options{Rev: fs.Arg(0), Tier: *tier})
@@ -79,7 +88,47 @@ func cmdRun(ctx context.Context, args []string) int {
 			return 1
 		}
 	}
+	// Only a pass: a failure exits non-zero and the hook blocks the push, so the commit would
+	// not reach GitHub and a poster would wait for nothing.
+	if *afterPush && err == nil && o != nil && o.Passed {
+		// A failure to schedule the status must not block a push whose checks passed.
+		if log, perr := deferStatus(o, err); perr != nil {
+			fmt.Fprintln(os.Stderr, "localci: warning: status will not be posted:", perr)
+		} else {
+			fmt.Printf("localci: statuses will be posted once %s reaches GitHub (log: %s)\n", o.SHA[:12], log)
+		}
+	}
 	return exitCode(o, err)
+}
+
+func deferStatus(o *localci.Outcome, runErr error) (string, error) {
+	root := localci.DefaultCacheRoot()
+	if err := localci.SavePending(root, o, runErr); err != nil {
+		return "", err
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return localci.StartPostPending(root, bin, o.Repo, o.SHA)
+}
+
+// cmdPostPending is started by `run --status-after-push`; it is not meant to be run by hand.
+func cmdPostPending(ctx context.Context, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: localci post-pending <sha>")
+		return 2
+	}
+	repo, sha, err := localci.Resolve(ctx, localci.Options{Rev: args[0]})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "localci:", err)
+		return 2
+	}
+	if err := localci.PostPending(ctx, localci.DefaultCacheRoot(), repo, sha, 10*time.Minute, 5*time.Second, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "localci:", err)
+		return 1
+	}
+	return 0
 }
 
 func cmdPush(ctx context.Context, args []string) int {

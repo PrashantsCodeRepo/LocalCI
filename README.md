@@ -160,8 +160,8 @@ are pinned per dependency the same way (`python3.14`, then `python@3.14`).
 `localci push` runs the checks on HEAD. If they pass it runs `git push` with your
 arguments, then posts the
 `localci` status (and `localci/<group>` with `per_group`) through `gh api`. A pre-push hook
-cannot do this itself, because GitHub does not have the commit until the push finishes.
-During that push, `LOCALCI_CHECKED` tells the pre-push hook which SHA was just checked. The
+cannot post right away, because GitHub does not have the commit until the push finishes
+(see Hooks for how it posts later). During that push, `LOCALCI_CHECKED` tells the pre-push hook which SHA was just checked. The
 hook skips only refs at that SHA, so any other branch the push arguments include is still
 checked.
 `localci run --status <rev>` posts for a commit that is already on GitHub.
@@ -173,9 +173,22 @@ security boundary. It says nothing a reviewer should rely on to prove the code w
 ## Hooks
 
 `localci hook install` writes a pre-push hook into whatever directory git uses for hooks
-(`core.hooksPath` included). It runs `localci run <sha>` for each commit being pushed and
-blocks the push if one fails. It will not replace a hook it did not write unless you pass
-`--force`.
+(`core.hooksPath` included). It runs `localci run --status-after-push <sha>` for each commit
+being pushed and blocks the push if one fails. It will not replace a hook it did not write
+unless you pass `--force`. Reinstall it after upgrading localci, since the hook text changes.
+
+The hook runs the binary that installed it, and falls back to `localci` on PATH only if that
+file is gone.
+
+`--status-after-push` posts the statuses once the push lands, so a plain `git push` gates
+the PR the same way `localci push` does. Only a passing run schedules a post; a failing one
+blocks the push, so there is nothing to post. The run saves its statuses to
+`~/.cache/localci/runs/<sha>.pending.json` and starts a detached `localci post-pending <sha>`.
+That process checks every 5 seconds whether GitHub has the commit, posts the saved statuses,
+and removes the file. It reads the file only once the commit is there, so if a later run of
+the same commit replaced it, the latest result is the one posted. If the commit does not
+arrive within 10 minutes (the push was rejected, or the remote is not GitHub), it gives up
+and leaves the file. Its output is in `<sha>.post.log` next to the run log.
 
 With Lefthook or pre-commit, call `localci run` from your existing config instead:
 
