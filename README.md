@@ -84,6 +84,8 @@ deps:
 
 fail_fast: true             # default: stop at the first failing step
 
+skip_when_only: ["*.md", "docs/**/*.md"]   # see "Skipping docs-only commits"
+
 status:
   context: localci          # default
   per_group: true           # also post localci/<group>
@@ -111,6 +113,27 @@ groups:
 ```
 
 `run` is a bash script run with `-eo pipefail`. Groups run in order.
+
+### Skipping docs-only commits
+
+`skip_when_only` lists path globs. Each segment is a shell-style pattern, and a `**` segment
+matches any number of directories, so `*.md` matches only Markdown at the root and
+`docs/**/*.md` matches Markdown anywhere under `docs/`. The commit is diffed against where it
+left the default branch (`git diff --no-renames origin/HEAD...<sha>`). If every changed path
+matches, no step runs, and the statuses are posted as success with a "skipped" description.
+The code is then exactly the default branch's code, so this is only as safe as the default
+branch is tested.
+
+The checks still run when:
+
+- any changed path does not match, including either side of a rename;
+- the commit changes `.localci.yml`, so a config cannot widen the skip to cover itself;
+- the skip check itself fails (no merge base, say), which is logged as a warning;
+- the diff is empty, so checking the default branch itself never skips;
+- `origin/HEAD` is not set (`git remote set-head origin --auto` sets it).
+
+A stale `origin/HEAD` can only widen the diff, so it runs more, never less. Leave out
+anything a test reads: a Markdown file a test opens belongs to the code.
 
 ### Postgres
 
@@ -208,5 +231,5 @@ missing tool, unreachable database, interrupted).
 ## Not built yet
 
 Service processes (start a server, wait on a health URL, inject its URL), shared read-only
-assets (model weights by checksum), path filters, and a Docker-backed Postgres are planned
+assets (model weights by checksum), and a Docker-backed Postgres are planned
 but not implemented.
