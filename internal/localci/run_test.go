@@ -151,7 +151,7 @@ func TestHookSkipsOnlyTheCheckedSHA(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "fake-localci")
 	log := filepath.Join(dir, "calls")
-	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$2\" >> "+log+"\n"), 0o755)
+	os.WriteFile(bin, []byte("#!/bin/sh\necho \"$2 $3\" >> "+log+"\n"), 0o755)
 	hook := filepath.Join(dir, "pre-push")
 	os.WriteFile(hook, []byte(HookScript(bin)), 0o755)
 
@@ -166,7 +166,7 @@ func TestHookSkipsOnlyTheCheckedSHA(t *testing.T) {
 		t.Fatalf("%v: %s", err, out)
 	}
 	got, _ := os.ReadFile(log)
-	if strings.TrimSpace(string(got)) != b {
-		t.Errorf("hook checked %q, want only %s", got, b)
+	if strings.TrimSpace(string(got)) != "--status-after-push "+b {
+		t.Errorf("hook ran %q, want only --status-after-push %s", got, b)
 	}
 }
