@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -27,6 +28,10 @@ type Config struct {
 	Env      map[string]string `yaml:"env"`
 	Postgres *Postgres         `yaml:"postgres"`
 	Deps     []Dep             `yaml:"deps"`
+	// SkipWhenOnly lists path globs ("**" matches any number of directories). When every
+	// path a commit changes since it left origin/HEAD matches one, the checks are skipped
+	// and the statuses say so.
+	SkipWhenOnly []string `yaml:"skip_when_only"`
 	// FailFast stops at the first failing step. Default true.
 	FailFast *bool        `yaml:"fail_fast"`
 	Status   StatusConfig `yaml:"status"`
@@ -188,6 +193,16 @@ func (c *Config) validate() error {
 			}
 		default:
 			return fmt.Errorf("deps %s: kind must be npm or python", d.Name)
+		}
+	}
+	for _, pat := range c.SkipWhenOnly {
+		if pat == "" || strings.HasPrefix(pat, "/") {
+			return fmt.Errorf("skip_when_only %q: use a non-empty path relative to the repository root", pat)
+		}
+		for _, seg := range strings.Split(pat, "/") {
+			if _, err := path.Match(seg, ""); err != nil {
+				return fmt.Errorf("skip_when_only %q: %v", pat, err)
+			}
 		}
 	}
 	if len(c.Groups) == 0 {

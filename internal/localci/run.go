@@ -39,6 +39,8 @@ type Outcome struct {
 	Passed  bool
 	Elapsed time.Duration
 	LogPath string
+	// SkipReason is set when skip_when_only matched and no step ran.
+	SkipReason string
 }
 
 // DefaultCacheRoot is where deps and run logs live.
@@ -113,6 +115,17 @@ func Run(ctx context.Context, opts Options) (out *Outcome, err error) {
 			fmt.Fprintf(w, "localci: %v\n", err)
 		}
 	}()
+	// If the skip check itself fails (no merge base, say), run the checks rather than block.
+	reason, serr := skipReason(ctx, repo, sha, cfg.SkipWhenOnly)
+	if serr != nil {
+		fmt.Fprintf(w, "localci: warning: not skipping: %v\n", serr)
+	}
+	if reason != "" {
+		out.SkipReason, out.Passed = reason, true
+		out.Elapsed = time.Since(start).Round(time.Second)
+		fmt.Fprintf(w, "localci: %s skipped: %s\n", sha[:12], reason)
+		return out, nil
+	}
 	fmt.Fprintf(w, "localci: checking %s (%s) in a clean worktree\n", sha[:12], repo)
 
 	for _, r := range cfg.Requires {
@@ -280,6 +293,15 @@ func Statuses(o *Outcome, runErr error) []report.Status {
 	suffix := " (self-reported)"
 	if runErr != nil && !o.Passed && o.Results == nil {
 		return []report.Status{{State: "error", Context: ctxName, Description: "could not run: " + runErr.Error()}}
+	}
+	if o.SkipReason != "" {
+		out := []report.Status{{State: "success", Context: ctxName, Description: "skipped: " + o.SkipReason + suffix}}
+		if o.Config != nil && o.Config.Status.PerGroup {
+			for _, g := range o.Config.Groups {
+				out = append(out, report.Status{State: "success", Context: ctxName + "/" + g.Name, Description: "skipped" + suffix})
+			}
+		}
+		return out
 	}
 	total, passed := 0, 0
 	var firstFail string
